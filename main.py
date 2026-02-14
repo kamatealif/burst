@@ -5,6 +5,9 @@ import re
 import time
 import math
 
+CHAR_WIDTH = 2
+LINE_HEIGHT = 2
+
                 
 def get_words(text, no_words= 100):
     words = random.choices(text, k= no_words)
@@ -62,14 +65,14 @@ def build_layout(text, width, max_lines):
     return positions
 
 
-def render_text(stdscr, text, typed, y=1, x=0):
+def render_text(stdscr, text, typed, y=1, x=0, char_width=CHAR_WIDTH, line_height=LINE_HEIGHT):
     max_y, max_x = stdscr.getmaxyx()
-    max_chars = max(0, max_x - x - 1)
+    max_chars = max(0, (max_x - x - 1) // char_width)
 
     if max_chars == 0 or y >= max_y:
         return []
 
-    max_lines = max_y - y
+    max_lines = max(0, (max_y - y) // line_height)
     positions = build_layout(text, max_chars, max_lines)
 
     for idx, ch in enumerate(text):
@@ -82,7 +85,10 @@ def render_text(stdscr, text, typed, y=1, x=0):
         if idx < len(typed):
             color = 2 if typed[idx] == ch else 3
 
-        stdscr.addch(y + row, x + col, ch, curses.color_pair(color))
+        draw_row = y + (row * line_height)
+        draw_col = x + (col * char_width)
+        char_block = (" " * char_width) if ch == " " else (ch + (" " * (char_width - 1)))
+        stdscr.addstr(draw_row, draw_col, char_block, curses.color_pair(color))
 
     return positions
 
@@ -165,7 +171,7 @@ def main(stdscr):
         text = ["typing", "practice", "words"]
 
     target_text = get_words(text)
-    game_duration = 10
+    game_duration = 30
     started_at = None
     time_up = False
 
@@ -202,12 +208,12 @@ def main(stdscr):
         if len(buffer) >= len(target_text):
             if positions:
                 last = next((p for p in reversed(positions) if p is not None), (0, 0))
-                cursor_row = min(curses.LINES - 1, 2 + last[0])
-                cursor_col = min(curses.COLS - 1, last[1] + 1)
+                cursor_row = min(curses.LINES - 1, 2 + (last[0] * LINE_HEIGHT))
+                cursor_col = min(curses.COLS - 1, (last[1] + 1) * CHAR_WIDTH)
                 stdscr.move(cursor_row, cursor_col)
         elif positions and positions[len(buffer)] is not None:
             row, col = positions[len(buffer)]
-            stdscr.move(2 + row, col)
+            stdscr.move(2 + (row * LINE_HEIGHT), col * CHAR_WIDTH)
 
         stdscr.refresh()
 
