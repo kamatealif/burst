@@ -10,13 +10,15 @@ LINE_HEIGHT = 1
 VISIBLE_LINES = 3
 FPS = 60
 FRAME_TIME = 1 / FPS
-CURSOR_SMOOTHING = 0.11
+CURSOR_SMOOTHING = 0.5
+CURSOR_SNAP_DISTANCE = 3
+CURSOR_MIN_STEP = 0.12
 DEFAULT_WORD_COUNT = 100
 
 DIFFICULTY_SETTINGS = {
     "easy": {
         "label": "Easy",
-        "timer": 60,
+        "timer": 10,
         "min_len": 1,
         "max_len": 5,
         "punctuation_rate": 0.00,
@@ -248,40 +250,57 @@ def calculate_stats(typed, target, elapsed_seconds):
     return wpm, accuracy, wrong_words
 
 
-def render_results(stdscr, wpm, accuracy, wrong_words):
-    stdscr.clear()
-    max_y, max_x = stdscr.getmaxyx()
-
-    lines = [
-        "Time Up",
-        f"WPM            : {wpm:.2f}",
-        f"Accuracy       : {accuracy:.2f}%",
-        f"Wrong Words    : {wrong_words}",
-        "Press ENTER or any key to exit",
-    ]
-
-    start_row = max(0, (max_y - len(lines)) // 2)
-    panel_width = min(max_x - 2, max(len(line) for line in lines) + 8)
-    panel_col = max(0, (max_x - panel_width) // 2)
-    if max_y >= 6 and panel_width > 4:
-        stdscr.addstr(max(0, start_row - 2), panel_col, "+" + "-" * (panel_width - 2) + "+", curses.color_pair(4))
-        stdscr.addstr(min(max_y - 1, start_row + len(lines) + 1), panel_col, "+" + "-" * (panel_width - 2) + "+", curses.color_pair(4))
-
-    for idx, line in enumerate(lines):
-        col = max(0, (max_x - len(line)) // 2)
-        color = 4 if idx == 0 else 1
-        stdscr.addstr(start_row + idx, col, line, curses.color_pair(color) | curses.A_BOLD)
-
-    stdscr.refresh()
-    # Ignore all input for 5 seconds so results remain visible.
+def render_results(stdscr, wpm, accuracy, wrong_words, title="Time Up", close_after=5):
     stdscr.nodelay(True)
-    ignore_until = time.monotonic() + 5
-    while time.monotonic() < ignore_until:
-        stdscr.getch()
+    close_at = time.monotonic() + close_after
+
+    while True:
+        now = time.monotonic()
+        remaining_close = max(0.0, close_at - now)
+        if remaining_close <= 0:
+            break
+
+        stdscr.clear()
+        max_y, max_x = stdscr.getmaxyx()
+
+        lines = [
+            title,
+            f"WPM            : {wpm:.2f}",
+            f"Accuracy       : {accuracy:.2f}%",
+            f"Wrong Words    : {wrong_words}",
+            f"Closing In     : {remaining_close:04.1f}s",
+            "Result screen auto-closes",
+        ]
+
+        start_row = max(0, (max_y - len(lines)) // 2)
+        panel_width = min(max_x - 2, max(len(line) for line in lines) + 8) if max_x > 2 else max_x
+        panel_col = max(0, (max_x - panel_width) // 2)
+        if max_y >= 4 and panel_width > 2:
+            top_row = max(0, start_row - 2)
+            bottom_row = min(max_y - 1, start_row + len(lines) + 1)
+            border = "+" + "-" * (panel_width - 2) + "+"
+            stdscr.addnstr(top_row, panel_col, border, max_x - panel_col, curses.color_pair(4))
+            stdscr.addnstr(bottom_row, panel_col, border, max_x - panel_col, curses.color_pair(4))
+            for row in range(top_row + 1, bottom_row):
+                if panel_col < max_x:
+                    stdscr.addch(row, panel_col, "|", curses.color_pair(4))
+                right_col = panel_col + panel_width - 1
+                if right_col < max_x:
+                    stdscr.addch(row, right_col, "|", curses.color_pair(4))
+
+        for idx, line in enumerate(lines):
+            row = start_row + idx
+            if row < 0 or row >= max_y:
+                continue
+            col = max(0, (max_x - len(line)) // 2)
+            color = 4 if idx == 0 else 1
+            stdscr.addnstr(row, col, line, max_x - col, curses.color_pair(color) | curses.A_BOLD)
+
+        stdscr.refresh()
+        stdscr.getch()  # drain any key while countdown is active
         curses.napms(50)
+
     stdscr.nodelay(False)
-    stdscr.timeout(-1)
-    stdscr.getch()
 
 
 def select_difficulty(stdscr):
@@ -431,8 +450,24 @@ def main(stdscr):
                 cursor_anim_row = float(cursor_target_row)
                 cursor_anim_col = float(cursor_target_col)
             else:
-                cursor_anim_row += (cursor_target_row - cursor_anim_row) * CURSOR_SMOOTHING
-                cursor_anim_col += (cursor_target_col - cursor_anim_col) * CURSOR_SMOOTHING
+                delta_row = cursor_target_row - cursor_anim_row
+                delta_col = cursor_target_col - cursor_anim_col
+
+                # Snap on big jumps (new line / scroll / resize) to avoid lagging cursor.
+                if abs(delta_row) >= 1 or (abs(delta_row) + abs(delta_col)) >= CURSOR_SNAP_DISTANCE:
+                    cursor_anim_row = float(cursor_target_row)
+                    cursor_anim_col = float(cursor_target_col)
+                else:
+                    cursor_anim_row += delta_row * CURSOR_SMOOTHING
+                    cursor_anim_col += delta_col * CURSOR_SMOOTHING
+
+                    # Ensure tiny deltas still move every frame for smoother feel.
+                    if 0 < abs(delta_col) < CURSOR_MIN_STEP:
+                        cursor_anim_col += CURSOR_MIN_STEP if delta_col > 0 else -CURSOR_MIN_STEP
+
+                    # Keep interpolation from stepping past the target.
+                    if (cursor_target_col - cursor_anim_col) * delta_col < 0:
+                        cursor_anim_col = float(cursor_target_col)
 
             stdscr.move(int(round(cursor_anim_row)), int(round(cursor_anim_col)))
 
@@ -443,10 +478,29 @@ def main(stdscr):
         if sleep_ms > 0:
             curses.napms(sleep_ms)
 
+    elapsed_total = 0 if started_at is None else min(game_duration, time.monotonic() - started_at)
+    remaining_after_exit = max(0, game_duration - elapsed_total)
+
     if time_up:
-        elapsed_total = min(game_duration, time.monotonic() - started_at)
         wpm, accuracy, wrong_words = calculate_stats(buffer, target_text, elapsed_total)
-        render_results(stdscr, wpm, accuracy, wrong_words)
+        render_results(
+            stdscr,
+            wpm,
+            accuracy,
+            wrong_words,
+            title="Time Up",
+            close_after=5,
+        )
+    elif should_exit:
+        wpm, accuracy, wrong_words = calculate_stats(buffer, target_text, elapsed_total)
+        render_results(
+            stdscr,
+            wpm,
+            accuracy,
+            wrong_words,
+            title="Exited Early",
+            close_after=5,
+        )
     
 
 if __name__ == "__main__":
