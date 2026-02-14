@@ -10,7 +10,7 @@ LINE_HEIGHT = 1
 VISIBLE_LINES = 3
 FPS = 60
 FRAME_TIME = 1 / FPS
-CURSOR_SMOOTHING = 0.35
+CURSOR_SMOOTHING = 0.11
 DEFAULT_WORD_COUNT = 100
 
 DIFFICULTY_SETTINGS = {
@@ -205,13 +205,29 @@ def render_timer(stdscr, remaining_seconds):
     stdscr.addnstr(0, timer_x, timer_label, max_x - timer_x, curses.color_pair(4) | curses.A_BOLD)
 
 
-def render_header(stdscr, difficulty):
+def calculate_live_metrics(typed, target, elapsed_seconds):
+    typed_len = len(typed)
+    if typed_len == 0:
+        return 0.0, 0.0, 0
+
+    correct_chars = sum(1 for i, ch in enumerate(typed) if i < len(target) and ch == target[i])
+    errors = typed_len - correct_chars
+    accuracy = (correct_chars / typed_len) * 100 if typed_len > 0 else 0.0
+    minutes = elapsed_seconds / 60 if elapsed_seconds > 0 else 0
+    wpm = (correct_chars / 5) / minutes if minutes > 0 else 0.0
+    return wpm, accuracy, errors
+
+
+def render_header(stdscr, difficulty, wpm, accuracy, errors):
     max_y, max_x = stdscr.getmaxyx()
-    if max_y <= 1:
+    if max_y <= 2:
         return
 
     diff_label = f"MODE {DIFFICULTY_SETTINGS[difficulty]['label']}"
     stdscr.addnstr(1, 0, diff_label, max_x, curses.color_pair(4) | curses.A_BOLD)
+    stats = f"WPM {wpm:5.1f}   ACC {accuracy:6.2f}%   ERR {errors}"
+    stats_x = max(0, (max_x - len(stats)) // 2)
+    stdscr.addnstr(2, stats_x, stats, max_x - stats_x, curses.color_pair(1) | curses.A_BOLD)
 
 
 def calculate_stats(typed, target, elapsed_seconds):
@@ -390,22 +406,25 @@ def main(stdscr):
             elif current_line < window_start:
                 window_start = current_line
 
+        elapsed_live = 0 if started_at is None else (time.monotonic() - started_at)
+        live_wpm, live_accuracy, live_errors = calculate_live_metrics(buffer, target_text, elapsed_live)
+
         stdscr.erase()
         render_timer(stdscr, remaining_display)
-        render_header(stdscr, difficulty)
-        render_text(stdscr, target_text, buffer, positions, window_start, y=3, x=0)
+        render_header(stdscr, difficulty, live_wpm, live_accuracy, live_errors)
+        render_text(stdscr, target_text, buffer, positions, window_start, y=4, x=0)
 
         if target_text:
-            cursor_target_row = 3
+            cursor_target_row = 4
             cursor_target_col = 0
             if len(buffer) >= len(target_text):
                 last = next((p for p in reversed(positions) if p is not None), (0, 0))
                 row, col = last
-                cursor_target_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
+                cursor_target_row = min(curses.LINES - 1, 4 + ((row - window_start) * LINE_HEIGHT))
                 cursor_target_col = min(curses.COLS - 1, (col + 1) * CHAR_WIDTH)
             elif positions[len(buffer)] is not None:
                 row, col = positions[len(buffer)]
-                cursor_target_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
+                cursor_target_row = min(curses.LINES - 1, 4 + ((row - window_start) * LINE_HEIGHT))
                 cursor_target_col = min(curses.COLS - 1, col * CHAR_WIDTH)
 
             if cursor_anim_row is None or cursor_anim_col is None:
