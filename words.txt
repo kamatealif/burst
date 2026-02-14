@@ -1,3 +1,12 @@
+## Optional difficulty-specific pools (new format):
+## easy: apple light quick stone
+## medium: system market focus method
+## hard: abstraction synchronization infrastructure
+
+easy: cat dog sun tree book lamp fish
+medium: typing focus memory window signal matrix
+hard: algorithmic architecture asynchronous optimization resilience
+
 Life rewards clarity more than confidence. Many people confuse loud certainty with truth, but history has repeatedly shown that quiet, methodical thinking changes the world. Every meaningful breakthrough—scientific, social, or technological—started with someone willing to slow down and observe reality as it actually is, not as they wished it to be.
 
 The human brain evolved to conserve energy, which means it prefers shortcuts. These shortcuts are called biases. Biases are not moral failures; they are survival mechanisms. However, in a modern world overflowing with information, these shortcuts often mislead us. Critical thinking is the skill of deliberately overriding these shortcuts when accuracy matters more than comfort.

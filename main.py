@@ -10,6 +10,34 @@ LINE_HEIGHT = 1
 VISIBLE_LINES = 3
 FPS = 60
 FRAME_TIME = 1 / FPS
+DEFAULT_WORD_COUNT = 100
+
+DIFFICULTY_SETTINGS = {
+    "easy": {
+        "label": "Easy",
+        "timer": 60,
+        "min_len": 1,
+        "max_len": 5,
+        "punctuation_rate": 0.00,
+        "punctuation_set": [".", ","],
+    },
+    "medium": {
+        "label": "Medium",
+        "timer": 60,
+        "min_len": 4,
+        "max_len": 8,
+        "punctuation_rate": 0.08,
+        "punctuation_set": [".", ",", "!", "?"],
+    },
+    "hard": {
+        "label": "Hard",
+        "timer": 60,
+        "min_len": 6,
+        "max_len": 14,
+        "punctuation_rate": 0.18,
+        "punctuation_set": [".", ",", "!", "?", ";", ":", "@", "#", "/", "<", ">", "(", ")"],
+    },
+}
 
                 
 def get_words(text, no_words= 100):
@@ -26,6 +54,63 @@ def clean_words(raw_words):
         if only_letters:
             cleaned.append(only_letters)
     return cleaned
+
+
+def filter_by_length(words, min_len, max_len):
+    filtered = [w for w in words if min_len <= len(w) <= max_len]
+    return filtered if filtered else words
+
+
+def apply_punctuation(text, rate, punctuation_set):
+    if rate <= 0 or not punctuation_set:
+        return text
+
+    words = text.split()
+    for i, word in enumerate(words):
+        if random.random() < rate:
+            words[i] = f"{word}{random.choice(punctuation_set)}"
+    return " ".join(words)
+
+
+def load_word_pools(words_file):
+    pools = {
+        "common": [],
+        "easy": [],
+        "medium": [],
+        "hard": [],
+    }
+
+    if not os.path.exists(words_file):
+        return pools
+
+    with open(words_file, "r") as file:
+        for raw_line in file:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            lowered = line.lower()
+            if lowered.startswith("easy:"):
+                pools["easy"].extend(clean_words(line[5:].split()))
+            elif lowered.startswith("medium:"):
+                pools["medium"].extend(clean_words(line[7:].split()))
+            elif lowered.startswith("hard:"):
+                pools["hard"].extend(clean_words(line[5:].split()))
+            else:
+                pools["common"].extend(clean_words(line.split()))
+
+    return pools
+
+
+def get_words_for_difficulty(pools, difficulty):
+    config = DIFFICULTY_SETTINGS[difficulty]
+    base_words = pools["common"] + pools[difficulty]
+    if not base_words:
+        base_words = ["typing", "practice", "speed", "keyboard", "accuracy"]
+
+    filtered_words = filter_by_length(base_words, config["min_len"], config["max_len"])
+    generated = get_words(filtered_words, DEFAULT_WORD_COUNT)
+    return apply_punctuation(generated, config["punctuation_rate"], config["punctuation_set"])
 
 
 def build_layout(text, width, max_lines):
@@ -119,6 +204,15 @@ def render_timer(stdscr, remaining_seconds):
     stdscr.addnstr(0, timer_x, timer_label, max_x - timer_x, curses.color_pair(4) | curses.A_BOLD)
 
 
+def render_header(stdscr, difficulty):
+    max_y, max_x = stdscr.getmaxyx()
+    if max_y <= 1:
+        return
+
+    diff_label = f"MODE {DIFFICULTY_SETTINGS[difficulty]['label']}"
+    stdscr.addnstr(1, 0, diff_label, max_x, curses.color_pair(4) | curses.A_BOLD)
+
+
 def calculate_stats(typed, target, elapsed_seconds):
     total_typed = len(typed)
     correct_chars = sum(1 for i, ch in enumerate(typed) if i < len(target) and ch == target[i])
@@ -173,6 +267,37 @@ def render_results(stdscr, wpm, accuracy, wrong_words):
     stdscr.getch()
 
 
+def select_difficulty(stdscr):
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
+
+    while True:
+        stdscr.clear()
+        max_y, max_x = stdscr.getmaxyx()
+        lines = [
+            "Select Difficulty",
+            "1) Easy   - short words, no punctuation, 90s",
+            "2) Medium - normal words, light punctuation, 60s",
+            "3) Hard   - long words, more punctuation, 45s",
+            "Press 1 / 2 / 3",
+        ]
+
+        start_row = max(0, (max_y - len(lines)) // 2)
+        for idx, line in enumerate(lines):
+            col = max(0, (max_x - len(line)) // 2)
+            style = curses.color_pair(4) | curses.A_BOLD if idx == 0 else curses.color_pair(1)
+            stdscr.addnstr(start_row + idx, col, line, max_x - col, style)
+
+        stdscr.refresh()
+        ch = stdscr.getch()
+        if ch == ord("1"):
+            return "easy"
+        if ch == ord("2"):
+            return "medium"
+        if ch == ord("3"):
+            return "hard"
+
+
 def main(stdscr):
     curses.curs_set(1)
     stdscr.clear()
@@ -193,16 +318,12 @@ def main(stdscr):
     
     curses.init_pair(3, curses.COLOR_RED, -1)
     curses.init_pair(4, curses.COLOR_CYAN, -1)
-    text = ["typing", "practice", "words"]
-    if os.path.exists('words.txt'):
-        with open('words.txt', 'r') as file:
-            text = clean_words(file.read().split())
+    difficulty = select_difficulty(stdscr)
+    stdscr.nodelay(True)
 
-    if not text:
-        text = ["typing", "practice", "words"]
-
-    target_text = get_words(text)
-    game_duration = 10
+    pools = load_word_pools("words.txt")
+    target_text = get_words_for_difficulty(pools, difficulty)
+    game_duration = DIFFICULTY_SETTINGS[difficulty]["timer"]
     started_at = None
     time_up = False
     window_start = 0
@@ -268,18 +389,19 @@ def main(stdscr):
 
         stdscr.erase()
         render_timer(stdscr, remaining_display)
-        render_text(stdscr, target_text, buffer, positions, window_start, y=2, x=0)
+        render_header(stdscr, difficulty)
+        render_text(stdscr, target_text, buffer, positions, window_start, y=3, x=0)
 
         if target_text:
             if len(buffer) >= len(target_text):
                 last = next((p for p in reversed(positions) if p is not None), (0, 0))
                 row, col = last
-                cursor_row = min(curses.LINES - 1, 2 + ((row - window_start) * LINE_HEIGHT))
+                cursor_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
                 cursor_col = min(curses.COLS - 1, (col + 1) * CHAR_WIDTH)
                 stdscr.move(cursor_row, cursor_col)
             elif positions[len(buffer)] is not None:
                 row, col = positions[len(buffer)]
-                cursor_row = min(curses.LINES - 1, 2 + ((row - window_start) * LINE_HEIGHT))
+                cursor_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
                 cursor_col = min(curses.COLS - 1, col * CHAR_WIDTH)
                 stdscr.move(cursor_row, cursor_col)
 
