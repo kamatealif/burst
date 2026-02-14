@@ -6,7 +6,8 @@ import time
 import math
 
 CHAR_WIDTH = 2
-LINE_HEIGHT = 2
+LINE_HEIGHT = 1
+VISIBLE_LINES = 3
 
                 
 def get_words(text, no_words= 100):
@@ -65,15 +66,22 @@ def build_layout(text, width, max_lines):
     return positions
 
 
-def render_text(stdscr, text, typed, y=1, x=0, char_width=CHAR_WIDTH, line_height=LINE_HEIGHT):
+def render_text(
+    stdscr,
+    text,
+    typed,
+    positions,
+    window_start,
+    y=1,
+    x=0,
+    char_width=CHAR_WIDTH,
+    line_height=LINE_HEIGHT,
+):
     max_y, max_x = stdscr.getmaxyx()
     max_chars = max(0, (max_x - x - 1) // char_width)
 
     if max_chars == 0 or y >= max_y:
-        return []
-
-    max_lines = max(0, (max_y - y) // line_height)
-    positions = build_layout(text, max_chars, max_lines)
+        return
 
     for idx, ch in enumerate(text):
         pos = positions[idx]
@@ -81,16 +89,22 @@ def render_text(stdscr, text, typed, y=1, x=0, char_width=CHAR_WIDTH, line_heigh
             break
 
         row, col = pos
+        if row < window_start or row >= (window_start + VISIBLE_LINES):
+            continue
+
         color = 1
         if idx < len(typed):
             color = 2 if typed[idx] == ch else 3
 
-        draw_row = y + (row * line_height)
+        draw_row = y + ((row - window_start) * line_height)
         draw_col = x + (col * char_width)
-        char_block = (" " * char_width) if ch == " " else (ch + (" " * (char_width - 1)))
-        stdscr.addstr(draw_row, draw_col, char_block, curses.color_pair(color))
+        if draw_row >= max_y or draw_col >= max_x:
+            continue
 
-    return positions
+        # Clean 2-column glyph: readable and larger without distorted doubled letters.
+        char_block = (" " * char_width) if ch == " " else (ch + (" " * (char_width - 1)))
+        style = curses.color_pair(color) | curses.A_BOLD
+        stdscr.addnstr(draw_row, draw_col, char_block, max_x - draw_col, style)
 
 
 def render_timer(stdscr, remaining_seconds):
@@ -98,9 +112,9 @@ def render_timer(stdscr, remaining_seconds):
     if max_y <= 0:
         return
 
-    timer_label = f"{remaining_seconds // 60:02d}:{remaining_seconds % 60:02d}"
+    timer_label = f"TIME {remaining_seconds // 60:02d}:{remaining_seconds % 60:02d}"
     timer_x = max(0, (max_x - len(timer_label)) // 2)
-    stdscr.addstr(0, timer_x, timer_label, curses.color_pair(1))
+    stdscr.addnstr(0, timer_x, timer_label, max_x - timer_x, curses.color_pair(4) | curses.A_BOLD)
 
 
 def calculate_stats(typed, target, elapsed_seconds):
@@ -126,19 +140,32 @@ def render_results(stdscr, wpm, accuracy, wrong_words):
     max_y, max_x = stdscr.getmaxyx()
 
     lines = [
-        "Time Up!",
-        f"WPM: {wpm:.2f}",
-        f"Accuracy: {accuracy:.2f}%",
-        f"Wrongly Typed Words: {wrong_words}",
-        "Press any key to exit.",
+        "Time Up",
+        f"WPM            : {wpm:.2f}",
+        f"Accuracy       : {accuracy:.2f}%",
+        f"Wrong Words    : {wrong_words}",
+        "Press ENTER or any key to exit",
     ]
 
     start_row = max(0, (max_y - len(lines)) // 2)
+    panel_width = min(max_x - 2, max(len(line) for line in lines) + 8)
+    panel_col = max(0, (max_x - panel_width) // 2)
+    if max_y >= 6 and panel_width > 4:
+        stdscr.addstr(max(0, start_row - 2), panel_col, "+" + "-" * (panel_width - 2) + "+", curses.color_pair(4))
+        stdscr.addstr(min(max_y - 1, start_row + len(lines) + 1), panel_col, "+" + "-" * (panel_width - 2) + "+", curses.color_pair(4))
+
     for idx, line in enumerate(lines):
         col = max(0, (max_x - len(line)) // 2)
-        stdscr.addstr(start_row + idx, col, line, curses.color_pair(1))
+        color = 4 if idx == 0 else 1
+        stdscr.addstr(start_row + idx, col, line, curses.color_pair(color) | curses.A_BOLD)
 
     stdscr.refresh()
+    # Drain buffered keys so fast typing at timeout does not instantly close results.
+    stdscr.nodelay(True)
+    while stdscr.getch() != -1:
+        pass
+    curses.napms(250)
+    stdscr.nodelay(False)
     stdscr.timeout(-1)
     stdscr.getch()
 
@@ -162,6 +189,7 @@ def main(stdscr):
     curses.init_pair(2, curses.COLOR_GREEN, -1) # Green text on Correct word
     
     curses.init_pair(3, curses.COLOR_RED, -1)
+    curses.init_pair(4, curses.COLOR_CYAN, -1)
     text = ["typing", "practice", "words"]
     if os.path.exists('words.txt'):
         with open('words.txt', 'r') as file:
@@ -171,9 +199,10 @@ def main(stdscr):
         text = ["typing", "practice", "words"]
 
     target_text = get_words(text)
-    game_duration = 30
+    game_duration = 60
     started_at = None
     time_up = False
+    window_start = 0
 
     while True:
         if started_at is None:
@@ -183,6 +212,10 @@ def main(stdscr):
             elapsed = time.monotonic() - started_at
             remaining = max(0, game_duration - elapsed)
             remaining_display = int(math.ceil(remaining))
+
+        if started_at is not None and remaining <= 0:
+            time_up = True
+            break
 
         ch = stdscr.getch()
 
@@ -201,25 +234,38 @@ def main(stdscr):
                     started_at = time.monotonic()
                 buffer += chr(ch)
 
+        max_y, max_x = stdscr.getmaxyx()
+        max_chars = max(1, (max_x - 1) // CHAR_WIDTH)
+        positions = build_layout(target_text, max_chars, len(target_text) + 1)
+
+        cursor_idx = min(len(buffer), len(target_text) - 1) if target_text else 0
+        cursor_pos = positions[cursor_idx] if target_text and positions else None
+
+        if cursor_pos is not None:
+            current_line = cursor_pos[0]
+            if current_line >= window_start + VISIBLE_LINES - 1:
+                window_start = current_line
+            elif current_line < window_start:
+                window_start = current_line
+
         stdscr.clear()
         render_timer(stdscr, remaining_display)
-        positions = render_text(stdscr, target_text, buffer, y=2, x=0)
+        render_text(stdscr, target_text, buffer, positions, window_start, y=2, x=0)
 
-        if len(buffer) >= len(target_text):
-            if positions:
+        if target_text:
+            if len(buffer) >= len(target_text):
                 last = next((p for p in reversed(positions) if p is not None), (0, 0))
-                cursor_row = min(curses.LINES - 1, 2 + (last[0] * LINE_HEIGHT))
-                cursor_col = min(curses.COLS - 1, (last[1] + 1) * CHAR_WIDTH)
+                row, col = last
+                cursor_row = min(curses.LINES - 1, 2 + ((row - window_start) * LINE_HEIGHT))
+                cursor_col = min(curses.COLS - 1, (col + 1) * CHAR_WIDTH)
                 stdscr.move(cursor_row, cursor_col)
-        elif positions and positions[len(buffer)] is not None:
-            row, col = positions[len(buffer)]
-            stdscr.move(2 + (row * LINE_HEIGHT), col * CHAR_WIDTH)
+            elif positions[len(buffer)] is not None:
+                row, col = positions[len(buffer)]
+                cursor_row = min(curses.LINES - 1, 2 + ((row - window_start) * LINE_HEIGHT))
+                cursor_col = min(curses.COLS - 1, col * CHAR_WIDTH)
+                stdscr.move(cursor_row, cursor_col)
 
         stdscr.refresh()
-
-        if started_at is not None and remaining <= 0:
-            time_up = True
-            break
 
     if time_up:
         elapsed_total = min(game_duration, time.monotonic() - started_at)
