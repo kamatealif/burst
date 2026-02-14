@@ -8,6 +8,8 @@ import math
 CHAR_WIDTH = 2
 LINE_HEIGHT = 1
 VISIBLE_LINES = 3
+FPS = 60
+FRAME_TIME = 1 / FPS
 
                 
 def get_words(text, no_words= 100):
@@ -175,7 +177,7 @@ def main(stdscr):
     curses.curs_set(1)
     stdscr.clear()
     curses.start_color()
-    stdscr.timeout(16)
+    stdscr.nodelay(True)
     
     # keeping the what is being typed on the terminal
     buffer = ""
@@ -200,12 +202,17 @@ def main(stdscr):
         text = ["typing", "practice", "words"]
 
     target_text = get_words(text)
-    game_duration = 60
+    game_duration = 10
     started_at = None
     time_up = False
     window_start = 0
+    positions = []
+    last_layout_size = (-1, -1)
+    should_exit = False
 
     while True:
+        frame_start = time.monotonic()
+
         if started_at is None:
             remaining = game_duration
             remaining_display = game_duration
@@ -218,26 +225,36 @@ def main(stdscr):
             time_up = True
             break
 
-        ch = stdscr.getch()
+        # Process all queued keys each frame to avoid input lag.
+        while True:
+            ch = stdscr.getch()
+            if ch == -1:
+                break
 
-        # enter key 
-        if ch in (10, 13):
-            break 
+            # enter key
+            if ch in (10, 13):
+                should_exit = True
+                break
 
-        # handle BACKSPACE
-        elif ch in (curses.KEY_BACKSPACE, 127, 8):
-            buffer = buffer[:-1]
+            # handle BACKSPACE
+            if ch in (curses.KEY_BACKSPACE, 127, 8):
+                buffer = buffer[:-1]
+                continue
 
-        # printable chars only 
-        elif 32 <= ch <= 126:
-            if len(buffer) < len(target_text):
+            # printable chars only
+            if 32 <= ch <= 126 and len(buffer) < len(target_text):
                 if started_at is None:
                     started_at = time.monotonic()
                 buffer += chr(ch)
 
+        if should_exit:
+            break
+
         max_y, max_x = stdscr.getmaxyx()
-        max_chars = max(1, (max_x - 1) // CHAR_WIDTH)
-        positions = build_layout(target_text, max_chars, len(target_text) + 1)
+        if (max_y, max_x) != last_layout_size:
+            max_chars = max(1, (max_x - 1) // CHAR_WIDTH)
+            positions = build_layout(target_text, max_chars, len(target_text) + 1)
+            last_layout_size = (max_y, max_x)
 
         cursor_idx = min(len(buffer), len(target_text) - 1) if target_text else 0
         cursor_pos = positions[cursor_idx] if target_text and positions else None
@@ -249,7 +266,7 @@ def main(stdscr):
             elif current_line < window_start:
                 window_start = current_line
 
-        stdscr.clear()
+        stdscr.erase()
         render_timer(stdscr, remaining_display)
         render_text(stdscr, target_text, buffer, positions, window_start, y=2, x=0)
 
@@ -267,6 +284,11 @@ def main(stdscr):
                 stdscr.move(cursor_row, cursor_col)
 
         stdscr.refresh()
+
+        frame_elapsed = time.monotonic() - frame_start
+        sleep_ms = int(max(0, (FRAME_TIME - frame_elapsed) * 1000))
+        if sleep_ms > 0:
+            curses.napms(sleep_ms)
 
     if time_up:
         elapsed_total = min(game_duration, time.monotonic() - started_at)
