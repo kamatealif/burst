@@ -160,11 +160,12 @@ def render_results(stdscr, wpm, accuracy, wrong_words):
         stdscr.addstr(start_row + idx, col, line, curses.color_pair(color) | curses.A_BOLD)
 
     stdscr.refresh()
-    # Drain buffered keys so fast typing at timeout does not instantly close results.
+    # Ignore all input for 5 seconds so results remain visible.
     stdscr.nodelay(True)
-    while stdscr.getch() != -1:
-        pass
-    curses.napms(250)
+    ignore_until = time.monotonic() + 5
+    while time.monotonic() < ignore_until:
+        stdscr.getch()
+        curses.napms(50)
     stdscr.nodelay(False)
     stdscr.timeout(-1)
     stdscr.getch()
