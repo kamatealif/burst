@@ -5,11 +5,12 @@ import re
 import time
 import math
 
-CHAR_WIDTH = 2
+CHAR_WIDTH = 1
 LINE_HEIGHT = 1
 VISIBLE_LINES = 3
 FPS = 60
 FRAME_TIME = 1 / FPS
+CURSOR_SMOOTHING = 0.35
 DEFAULT_WORD_COUNT = 100
 
 DIFFICULTY_SETTINGS = {
@@ -190,7 +191,7 @@ def render_text(
 
         # Clean 2-column glyph: readable and larger without distorted doubled letters.
         char_block = (" " * char_width) if ch == " " else (ch + (" " * (char_width - 1)))
-        style = curses.color_pair(color) | curses.A_BOLD
+        style = curses.color_pair(color)
         stdscr.addnstr(draw_row, draw_col, char_block, max_x - draw_col, style)
 
 
@@ -276,9 +277,9 @@ def select_difficulty(stdscr):
         max_y, max_x = stdscr.getmaxyx()
         lines = [
             "Select Difficulty",
-            "1) Easy   - short words, no punctuation, 90s",
+            "1) Easy   - short words, no punctuation, 60s",
             "2) Medium - normal words, light punctuation, 60s",
-            "3) Hard   - long words, more punctuation, 45s",
+            "3) Hard   - long words, more punctuation, 60s",
             "Press 1 / 2 / 3",
         ]
 
@@ -330,6 +331,8 @@ def main(stdscr):
     positions = []
     last_layout_size = (-1, -1)
     should_exit = False
+    cursor_anim_row = None
+    cursor_anim_col = None
 
     while True:
         frame_start = time.monotonic()
@@ -393,17 +396,26 @@ def main(stdscr):
         render_text(stdscr, target_text, buffer, positions, window_start, y=3, x=0)
 
         if target_text:
+            cursor_target_row = 3
+            cursor_target_col = 0
             if len(buffer) >= len(target_text):
                 last = next((p for p in reversed(positions) if p is not None), (0, 0))
                 row, col = last
-                cursor_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
-                cursor_col = min(curses.COLS - 1, (col + 1) * CHAR_WIDTH)
-                stdscr.move(cursor_row, cursor_col)
+                cursor_target_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
+                cursor_target_col = min(curses.COLS - 1, (col + 1) * CHAR_WIDTH)
             elif positions[len(buffer)] is not None:
                 row, col = positions[len(buffer)]
-                cursor_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
-                cursor_col = min(curses.COLS - 1, col * CHAR_WIDTH)
-                stdscr.move(cursor_row, cursor_col)
+                cursor_target_row = min(curses.LINES - 1, 3 + ((row - window_start) * LINE_HEIGHT))
+                cursor_target_col = min(curses.COLS - 1, col * CHAR_WIDTH)
+
+            if cursor_anim_row is None or cursor_anim_col is None:
+                cursor_anim_row = float(cursor_target_row)
+                cursor_anim_col = float(cursor_target_col)
+            else:
+                cursor_anim_row += (cursor_target_row - cursor_anim_row) * CURSOR_SMOOTHING
+                cursor_anim_col += (cursor_target_col - cursor_anim_col) * CURSOR_SMOOTHING
+
+            stdscr.move(int(round(cursor_anim_row)), int(round(cursor_anim_col)))
 
         stdscr.refresh()
 
